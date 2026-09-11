@@ -1,0 +1,47 @@
+Answers/deliverables
+
+Step 0.
+DELIVERABLE: Take a short video of Pupper walking with the default policy. How does this compare to your implementation from lab 4?
+
+Step 2. 
+DELIVERABLE: Before actually training a policy, what do you think will be the most important rewards to tune when training Pupper to walk forwards? What about making Pupper walk stably? Could these two factors have a combined effect and interfere? Write a few sentences in your lab document.
+
+Step 3. 
+DELIVERABLE: We use an exponential tracking function for Pupper to track a desired velocity. The plot below shows how the reward value depends on the x-axis velocity of the robot when the desired x-axis velocity is 1.0m/s.
+
+DELIVERABLE: Visualize Pupper's progress during training. How does Pupper look in the first 20 million env steps? How does it look after 200 million env steps?
+
+Step 4.
+DELIVERABLE: What is your reward function (in math, don't just take a screenshot from the notebook!)? Why did you choose this function? What existing reward terms could be used to make Pupper conserve energy, and what are their potential pros and cons? Are there any rewards that could be used that are not listed?
+
+DELIVERABLE: Qualitatively, how does this Pupper policy compare to the previous one?
+
+DELIVERABLE: Record a video of Pupper walking in simulation.
+
+Step 5. 
+DELIVERABLE: What terms are included in your reward functions? What coefficients did you use? How did you come up with these terms and what was their desired effect? Do you think this policy will perform well on the physical robot?
+
+DELIVERABLE: Visualize Pupper's progress during training. How does Pupper look in the first 20 million env steps? How does it look after 200 million env steps?
+
+DELIVERABLE: Record a video of Pupper walking in simulation.
+
+
+You should aim to train a stable policy up to 0.75 m/s in simulation
+
+DELIVERABLE: Record a video of Pupper standing still in simulation. To do this, you can set all commands to zero during visualization. Is Pupper able to stand still given zero commands?
+
+Step 6. 
+DELIVERABLE: In what ways is this policy different on the physical robot (compared to simulation)? We roboticists call this difference the "sim2real gap" (I think Jie invented this terminology for training robot dogs).
+
+DELIVERABLE: Take a video of Pupper walking! Do you notice any differences when Pupper is walking on different surfaces?
+
+DELIVERABLE: Inspect Pupper's gait on each leg, and compare it to the triangle gait from the heuristics walking lab. Do Pupper's legs move in a similar traingle motion in the gait you discovered? Write a few sentences about the similarities and differences you notice.
+
+Step 7. 
+DELIVERABLE: Comment on what might happen if you add too much domain randomization
+
+DELIVERABLE: Record a video of Pupper walking in simulation, and another video of Pupper walking in the real world with this policy.
+
+DELIVERABLE: Describe your approach to training an agile Pupper policy. What parameters were key? Did you use a heightfield? Why/why not?
+
+DELIVERABLE: Report all the graphs you get from the notebook with the best policy. Do a thorough analysis of the graphs: How do the gaits look like for your policy? What are the outputs of the policy you just trained? How do you think it gets passed to Pupper?
