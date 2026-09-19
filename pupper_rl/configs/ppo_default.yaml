@@ -1,0 +1,89 @@
+# Default MJX + brax PPO config for Pupper v3.
+# Override any key from CLI: python train.py ppo.learning_rate=1e-4 ppo.num_envs=1024
+
+seed: 0
+algo: ppo
+
+wandb:
+  enabled: true
+  project: pupperv3-mjx-rl   # must match download_latest_policy.py
+  entity: null               # null -> logged-in user's default entity
+  mode: online               # online | offline | disabled
+
+env:
+  model_xml: ../../pupperv3-monorepo/ros2_ws/src/pupper_v3_description/description/mujoco_xml/pupper_v3_complete.mjx.position.xml
+  reward_file: ../reward.py   # read-only, never edited
+  ctrl_dt: 0.02            # 50 Hz policy (matches neural_controller)
+  action_scale: 0.75
+  observation_history: 20  # robot expects in_shape = history * 36
+  default_joint_pos: [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
+  joint_lower_limits: [-1.22, -0.42, -2.79, -2.51, -3.14, -0.71, -1.22, -0.42, -2.79, -2.51, -3.14, -0.71]
+  joint_upper_limits: [2.51, 3.14, 0.71, 1.22, 0.42, 2.79, 2.51, 3.14, 0.71, 1.22, 0.42, 2.79]
+  command_ranges:          # sampled per episode
+    lin_vel_x: [-0.75, 0.75]
+    lin_vel_y: [-0.5, 0.5]
+    ang_vel_yaw: [-2.0, 2.0]
+  terminal_body_z: 0.05
+  terminal_body_angle: 0.70  # rad, same meaning as robot max_body_angle
+  reward_scales:           # keys = reward_<name> functions in reward.py
+    tracking_lin_vel: 1.5
+    tracking_ang_vel: 0.8
+    tracking_orientation: 0.5
+    lin_vel_z: -0.1
+    ang_vel_xy: -0.002
+    orientation: -0.0
+    torques: -0.025
+    joint_acceleration: -1.0e-6
+    mechanical_work: 0.0
+    action_rate: -0.1
+    feet_air_time: 0.02
+    stand_still: -0.0
+    abduction_angle: -0.01
+    foot_slip: -0.2
+    termination: -100.0
+  reward_params:           # non-env arguments of those functions
+    tracking_sigma: 0.25
+    command_threshold: 0.05     # stand_still: |cmd| below this counts as "stop"
+    step_threshold: 500         # termination penalty only before this step
+    minimum_airtime: 0.1
+    desired_world_z_in_body_frame: [0.0, 0.0, 1.0]
+  foot_contact_height: 0.015    # foot site z below this = ground contact (rest z ~0.005-0.011)
+  collision_bodies: []          # bodies whose geoms feed reward_geom_collision
+
+policy:
+  hidden_sizes: [256, 128, 128, 128]
+  value_hidden_sizes: [256, 128, 128, 128]
+  activation: elu          # RTNeural export supports elu/relu/tanh
+
+ppo:                       # passed to brax.training.agents.ppo.train
+  num_timesteps: 200_000_000
+  episode_length: 500
+  num_envs: 512           # 8GB GPU; raise on bigger cards
+  batch_size: 256          # batch_size * num_minibatches must be divisible by num_envs
+  num_minibatches: 32
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 3.0e-5
+  entropy_cost: 1.0e-2
+  discounting: 0.97
+  reward_scaling: 1.0
+  normalize_observations: true   # baked into first layer at export
+  action_repeat: 1
+  num_evals: 11            # also = number of checkpoints
+
+export:
+  kp: 5.0                  # written into policy JSON
+  kd: 0.25
+  use_imu: true
+  control_orientation: true
+
+logging:
+  output_root: outputs
+
+render:
+  mode: headless           # headless | human (viewer window) | video (mp4 -> W&B)
+  every_evals: 1           # render every Nth eval/checkpoint
+  episode_steps: 200       # rollout length for rendering
+  width: 640
+  height: 480
+  camera: -1               # -1 = free camera, or a camera name

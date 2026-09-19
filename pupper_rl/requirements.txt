@@ -1,0 +1,11 @@
+# Pinned to pupperv3-monorepo/ai/rl/uv.lock. Newer jax (>=0.8) removed
+# jax.device_put_replicated which brax PPO still calls.
+jax[cuda12]==0.7.1
+mujoco==3.3.5
+mujoco-mjx==3.3.5
+brax==0.13.0
+flax==0.11.1
+numpy
+pyyaml
+wandb
+imageio[ffmpeg]        # only needed for render.mode=video
