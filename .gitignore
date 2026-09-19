@@ -20,6 +20,10 @@ ENV/
 *.swo
 *~
 
+# Outputs
+outputs/
+wandb/
+
 # Backup files
 *.backup
 
