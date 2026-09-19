@@ -6,7 +6,11 @@ This script:
 1. Prompts for a run number to download a specific policy from wandb
 2. Downloads the policy if a run number is provided (or skips if Enter is pressed)
 3. Changes to the home directory
-4. Launches the neural controller with ros2 launch
+4. Launches the neural controller with ros2 launch(sim/robot, teleop)
+
+Arguments:
+1. sim: Launches Mujoco.
+2. teleop: Starts the Teleop Node.
 
 Usage:
     python3 deploy.py
@@ -16,6 +20,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import argparse
 
 SCRIPT_DIR = Path(__file__).parent
 DOWNLOAD_SCRIPT = SCRIPT_DIR / "download_latest_policy.py"
@@ -82,7 +87,7 @@ def download_policy():
         return False
 
 
-def launch_neural_controller():
+def launch_neural_controller(sim_flag, teleop_flag):
     """Launch the neural controller with ros2"""
     
     print("\n" + "=" * 70)
@@ -98,12 +103,17 @@ def launch_neural_controller():
     try:
         # Change to home directory and launch
         os.chdir(HOME_DIR)
+
+        launch_cmd = ["ros2", "launch", "neural_controller", "launch.py"]
+
+        if sim_flag:
+            launch_cmd.append("sim:=True")
+
+        if teleop_flag:
+            launch_cmd.append("teleop:=True")
         
         # Run ros2 launch - this will run in foreground
-        result = subprocess.run(
-            ["ros2", "launch", "neural_controller", "launch.py"],
-            check=False
-        )
+        result = subprocess.run(launch_cmd, check=False)
         
         return result.returncode
         
@@ -117,11 +127,18 @@ def launch_neural_controller():
 
 def main():
     """Main entry point"""
-    
+
     print("\n" + "=" * 70)
     print("Neural Controller Launch Script")
     print("=" * 70)
     print()
+
+    parser = argparse.ArgumentParser(description="Interactive script to download a policy and launch the neural controller.")
+
+    parser.add_argument("--sim", action="store_true", help="Launchs Sim")
+    parser.add_argument("--teleop", action="store_true", help="Launch With Teleop")
+
+    args = parser.parse_args()
     
     # Step 1: Download policy (optional)
     download_success = download_policy()
@@ -138,7 +155,7 @@ def main():
             return 1
     
     # Step 2: Launch the neural controller
-    return_code = launch_neural_controller()
+    return_code = launch_neural_controller(args.sim, args.teleop)
     
     return return_code
 

@@ -11,6 +11,11 @@ Usage:
     python3 rebuild_neural_controller.py              # Deploy, rebuild, and setup wandb
     python3 rebuild_neural_controller.py --dry-run    # Show what would be done without doing it
     python3 rebuild_neural_controller.py --no-build   # Deploy only, skip rebuild and wandb
+    python3 rebuild_neural_controller.py --monorepo /path/to/pupperv3-monorepo
+
+Paths are resolved relative to this script, so the lab folder can live anywhere.
+The monorepo is looked up in this order: --monorepo, $PUPPER_MONOREPO,
+/home/pi/pupperv3-monorepo (robot), a sibling of this folder (dev machine).
 """
 
 import os
@@ -19,38 +24,59 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Define source and destination mappings
-LAB_DIR = Path("/home/pi/lab_5_fall_2025")
-NEURAL_CONTROLLER_LAUNCH = Path("/home/pi/pupperv3-monorepo/ros2_ws/src/neural_controller/launch")
-ROS2_WS = Path("/home/pi/pupperv3-monorepo/ros2_ws")
+# This script lives in the lab folder; everything is resolved from there
+LAB_DIR = Path(__file__).resolve().parent
 
-FILE_MAPPINGS = [
-    {
-        "source": LAB_DIR / "config.yaml",
-        "destination": NEURAL_CONTROLLER_LAUNCH / "config.yaml",
-        "description": "Neural controller configuration file"
-    },
-    {
-        "source": LAB_DIR / "launch.py",
-        "destination": NEURAL_CONTROLLER_LAUNCH / "launch.py",
-        "description": "Neural controller launch file"
-    },
-    {
-        "source": LAB_DIR / "estop_controller.cpp",
-        "destination": Path("/home/pi/pupperv3-monorepo/ros2_ws/src/joy_utils/src/estop_controller.cpp"),
-        "description": "Emergency stop controller C++ source file"
-    },
-    {
-        "source": LAB_DIR / "parkour_policy.json",
-        "destination": NEURAL_CONTROLLER_LAUNCH / "parkour_policy.json",
-        "description": "Parkour neural network policy file"
-    },
-    {
-        "source": LAB_DIR / "test_policy.json",
-        "destination": NEURAL_CONTROLLER_LAUNCH / "test_policy.json",
-        "description": "Place Holder test policy file"
-    },
+# Where pupperv3-monorepo may live, most specific first
+MONOREPO_CANDIDATES = [
+    Path("/home/pi/pupperv3-monorepo"),   # robot
+    LAB_DIR.parent / "pupperv3-monorepo",  # dev machine (sibling of the lab folder)
 ]
+
+
+def resolve_monorepo(monorepo=None):
+    """Pick the monorepo root: --monorepo > $PUPPER_MONOREPO > robot path > sibling folder."""
+    explicit = monorepo or os.environ.get("PUPPER_MONOREPO")
+    if explicit:
+        path = Path(explicit)
+        return path if path.is_absolute() else (LAB_DIR / path).resolve()
+
+    for candidate in MONOREPO_CANDIDATES:
+        if candidate.is_dir():
+            return candidate.resolve()
+    return MONOREPO_CANDIDATES[-1].resolve()  # report the dev-machine path in the error
+
+
+def build_file_mappings(monorepo):
+    """Source (lab folder) -> destination (monorepo) for every deployed file."""
+    launch_dir = monorepo / "ros2_ws/src/neural_controller/launch"
+    return [
+        {
+            "source": LAB_DIR / "config.yaml",
+            "destination": launch_dir / "config.yaml",
+            "description": "Neural controller configuration file"
+        },
+        {
+            "source": LAB_DIR / "launch.py",
+            "destination": launch_dir / "launch.py",
+            "description": "Neural controller launch file"
+        },
+        {
+            "source": LAB_DIR / "estop_controller.cpp",
+            "destination": monorepo / "ros2_ws/src/joy_utils/src/estop_controller.cpp",
+            "description": "Emergency stop controller C++ source file"
+        },
+        {
+            "source": LAB_DIR / "parkour_policy.json",
+            "destination": launch_dir / "parkour_policy.json",
+            "description": "Parkour neural network policy file"
+        },
+        {
+            "source": LAB_DIR / "test_policy.json",
+            "destination": launch_dir / "test_policy.json",
+            "description": "Place Holder test policy file"
+        },
+    ]
 
 
 def create_backup(file_path):
@@ -62,12 +88,19 @@ def create_backup(file_path):
     return None
 
 
-def deploy_files(dry_run=False):
+def deploy_files(monorepo, dry_run=False):
     """Deploy all files to their destinations"""
     
     print("=" * 70)
     print("Neural Controller Deployment & Rebuild Script")
     print("=" * 70)
+    print(f"📁 Lab folder: {LAB_DIR}")
+    print(f"📁 Monorepo:   {monorepo}")
+    
+    if not monorepo.is_dir():
+        print(f"\n❌ ERROR: Monorepo not found: {monorepo}")
+        print("   Pass --monorepo /path/to/pupperv3-monorepo or set $PUPPER_MONOREPO")
+        return False
     
     if dry_run:
         print("\n🔍 DRY RUN MODE - No files will be modified\n")
@@ -75,7 +108,7 @@ def deploy_files(dry_run=False):
     success_count = 0
     error_count = 0
     
-    for mapping in FILE_MAPPINGS:
+    for mapping in build_file_mappings(monorepo):
         source = mapping["source"]
         destination = mapping["destination"]
         description = mapping["description"]
@@ -132,14 +165,15 @@ def deploy_files(dry_run=False):
     return error_count == 0
 
 
-def rebuild_workspace(dry_run=False):
+def rebuild_workspace(monorepo, dry_run=False):
     """Rebuild the ROS2 workspace"""
     
     print("\n" + "=" * 70)
     print("Rebuilding ROS2 Workspace")
     print("=" * 70)
     
-    build_script = ROS2_WS / "build.sh"
+    ros2_ws = monorepo / "ros2_ws"
+    build_script = ros2_ws / "build.sh"
     
     if not build_script.exists():
         print(f"❌ ERROR: Build script not found: {build_script}")
@@ -150,14 +184,14 @@ def rebuild_workspace(dry_run=False):
         return True
     
     print(f"🔨 Running build script: {build_script}")
-    print(f"📁 Working directory: {ROS2_WS}")
+    print(f"📁 Working directory: {ros2_ws}")
     print()
     
     try:
         # Run build.sh from the ros2_ws directory
         result = subprocess.run(
             ["bash", str(build_script)],
-            cwd=str(ROS2_WS),
+            cwd=str(ros2_ws),
             check=False,
             text=True
         )
@@ -231,13 +265,24 @@ def wandb_login():
         return True  # Don't fail the entire script for this
 
 
+def _arg_value(flag):
+    """Read `--flag value` or `--flag=value` from sys.argv; None if absent."""
+    for i, arg in enumerate(sys.argv):
+        if arg == flag and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.startswith(flag + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def main():
     """Main entry point"""
     dry_run = "--dry-run" in sys.argv or "-n" in sys.argv
     skip_build = "--no-build" in sys.argv
+    monorepo = resolve_monorepo(_arg_value("--monorepo"))
     
     # Step 1: Deploy files
-    deploy_success = deploy_files(dry_run)
+    deploy_success = deploy_files(monorepo, dry_run)
     
     if not deploy_success:
         print("\n❌ Deployment failed. Aborting.")
@@ -249,7 +294,7 @@ def main():
         return 0
     
     if not dry_run:
-        rebuild_success = rebuild_workspace(dry_run)
+        rebuild_success = rebuild_workspace(monorepo, dry_run)
         if not rebuild_success:
             print("\n❌ Rebuild failed.")
             return 1
@@ -257,7 +302,7 @@ def main():
         # Step 3: wandb authentication after successful rebuild
         wandb_login()
     else:
-        rebuild_workspace(dry_run)
+        rebuild_workspace(monorepo, dry_run)
     
     print("\n" + "=" * 70)
     print("✅ All operations completed successfully!")

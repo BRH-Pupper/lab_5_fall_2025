@@ -4,12 +4,33 @@ import shutil
 
 import wandb
 
+SCRIPT_DIR = pathlib.Path(__file__).parent
+
+# Where the neural_controller reads its policy from, most specific first.
+MODEL_DIR_CANDIDATES = [
+    pathlib.Path("/home/pi/pupperv3-monorepo/ros2_ws/src/neural_controller/launch"),  # robot
+    SCRIPT_DIR / ".." / "pupperv3-monorepo/ros2_ws/src/neural_controller/launch",     # dev machine
+    SCRIPT_DIR,                                                                        # fallback
+]
+
+
+def resolve_model_dir(model_dir=None) -> pathlib.Path:
+    """Pick the download directory: explicit > robot path > local monorepo > this folder."""
+    if model_dir is not None:
+        path = pathlib.Path(model_dir)
+        return path if path.is_absolute() else (SCRIPT_DIR / path).resolve()
+
+    for candidate in MODEL_DIR_CANDIDATES:
+        if candidate.is_dir():
+            return candidate.resolve()
+    return SCRIPT_DIR
+
 
 def download_latest_model(
     project_name,
     entity_name=None,
     run_number: int = None,
-    model_dir="/home/pi/pupperv3-monorepo/ros2_ws/src/neural_controller/launch",
+    model_dir=None,
     model_name="test_policy.json",
 ):
     """
@@ -18,7 +39,8 @@ def download_latest_model(
     :param project_name: The name of the W&B project.
     :param entity_name: The W&B entity (username or team). If None, fetches from logged-in user.
     :param run_number: The run number to download. If None, downloads the latest run.
-    :param model_dir: The directory where the model will be downloaded.
+    :param model_dir: The directory where the model will be downloaded. If None,
+        the first existing path in MODEL_DIR_CANDIDATES is used.
     :param model_name: The name to copy the model as.
     :return: None
     """
@@ -74,15 +96,14 @@ def download_latest_model(
     base_name = art.name.split(":")[0]
     print("Base name: ", base_name)
 
-    # get folder of this script
-    script_dir = pathlib.Path(__file__).parent
-    model_dir = pathlib.Path(model_dir)
+    model_dir = resolve_model_dir(model_dir)
+    print("Model directory: ", model_dir)
 
-    downloaded_filepath = script_dir / model_dir / pathlib.Path(base_name)
-    save_filepath = script_dir / model_dir / model_name
+    downloaded_filepath = model_dir / pathlib.Path(base_name)
+    save_filepath = model_dir / model_name
 
     # Download the file
-    art.download(root=script_dir / model_dir)
+    art.download(root=model_dir)
     print(f"Model downloaded to: {downloaded_filepath}")
     model_name = pathlib.Path(model_name)
     shutil.copyfile(downloaded_filepath, save_filepath)
@@ -99,6 +120,9 @@ if __name__ == "__main__":
                           help="Run number to download. If not specified, downloads the latest run.")
     argparser.add_argument("--entity", type=str, default=None,
                           help="W&B entity name. If not specified, uses the logged-in user's entity.")
+    argparser.add_argument("--model_dir", type=str, default=None,
+                          help="Directory to download into. Relative paths are resolved against this "
+                               "script. If not specified, the first existing candidate is used.")
     args = argparser.parse_args()
 
     # Call the function to download the latest model
@@ -107,4 +131,5 @@ if __name__ == "__main__":
         project_name,
         entity_name=args.entity,
         run_number=args.run_number,
+        model_dir=args.model_dir,
     )

@@ -10,7 +10,7 @@ from launch.substitutions import (
     IfElseSubstitution,
 )
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterFile
+from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition, UnlessCondition
 
@@ -64,7 +64,13 @@ def generate_launch_description():
     robot_description_content = Command(
         [PathJoinSubstitution([FindExecutable(name="xacro")]), " ", xacro_file]
     )
-    robot_description = {"robot_description": robot_description_content}
+    # value_type=str is required, not cosmetic: launch_ros otherwise runs yaml.safe_load on
+    # the URDF to infer the type, and any ": " sequence inside an XML comment makes YAML try
+    # to read it as a mapping and fail with "Unable to parse the value of parameter
+    # robot_description as yaml".
+    robot_description = {
+        "robot_description": ParameterValue(robot_description_content, value_type=str)
+    }
 
 
     #
