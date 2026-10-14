@@ -7,12 +7,16 @@ Basic PPO template: Pupper v3 in MJX (GPU) + brax PPO → W&B → robot via `lab
 ```
 pupper_rl/
 ├── train.py                     # entry: config → wandb → env → PPO → export → upload
+├── eval.py                      # inference: 10 episodes in the ROS sim, logged to W&B
 ├── configs/ppo_default.yaml     # all settings; override with dotted key=value
 ├── requirements.txt             # pinned to pupperv3-monorepo/ai/rl/uv.lock
 └── pupper_rl/
     ├── envs/
     │   ├── pupper_mjx_env.py    # brax PipelineEnv (mjx backend), obs == neural_controller.cpp
     │   └── reward_adapter.py    # loads ../reward.py read-only
+    ├── eval/
+    │   ├── ros_backend.py       # launch/teardown, start-pose keyframe swap (orchestrator)
+    │   └── ros_agent.py         # runs under SYSTEM python: activation, /cmd_vel, recording
     ├── algos/                   # all RL-library code lives here
     │   ├── __init__.py          # ALGOS registry
     │   ├── base.py              # Hooks / TrainResult: the train.py <-> algo contract
@@ -74,6 +78,36 @@ Register it in `ALGOS` and set `algo:` in the config; `cfg["ppo"]`, `cfg["policy
 and `cfg["export"]` are read inside the algorithm, so the config stays a thin
 wrapper. Checkpoint names must never contain ".json" (the robot-side downloader
 picks policies by that substring).
+
+## Evaluation (`eval.py`)
+
+```bash
+python eval.py --backend ros                  # prompts for a run number, like deploy.py
+python eval.py --backend ros --run 42
+python eval.py --backend ros --skip-download --episodes 2 wandb.mode=disabled
+```
+
+Model retrieval is deploy.py's flow: prompt a W&B run number → `../download_latest_policy.py`
+→ `test_policy.json`, so the evaluated file is what the robot would load. The policy then runs
+as RTNeural inside the `neural_controller` C++ controller (`neural_controller_test`, the one
+whose `model_path` is `test_policy.json`).
+
+Per episode: a randomized start pose (reuses `env.init_randomization`) is written as a sibling
+MuJoCo file and the install symlink is pointed at it; `ros2 launch neural_controller launch.py
+sim:=True teleop:=False` comes up; the controller is activated through
+`/controller_manager/switch_controller`; `/cmd_vel` is driven with the episode's command preset;
+`/<controller>/observation` is recorded; then everything is torn down and the symlink restored.
+
+Environment notes:
+- The workspace is built for ROS **Jazzy** while the host has Humble, so every ROS command runs
+  inside the `pupper-jazzy` distrobox via `distrobox-setup/crun.sh` (`eval.ros_container`,
+  `eval.ros_crun`). Launching on the host dies with `GLIBCXX_3.4.32 not found`.
+- `rclpy` lives in the container's python, not this venv, so the ROS side is a separate script
+  (`eval/ros_agent.py`) that returns metrics as JSON.
+- Metrics are limited to what ROS topics expose: survival, tilt (from projected gravity),
+  yaw-rate tracking, action rate, joint deviation. **No torso height and no body linear
+  velocity** — the sim publishes no ground-truth pose, so reward terms cannot be recomputed.
+- `--backend mjx` is not implemented yet.
 
 ## W&B / deploy contract (from download_latest_policy.py)
 

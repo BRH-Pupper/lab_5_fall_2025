@@ -103,3 +103,27 @@ render:
   width: 640
   height: 480
   camera: -1               # -1 = free camera, or a camera name
+
+eval:
+  episodes: 10
+  monorepo: ../../pupperv3-monorepo
+  randomize_start_pose: true      # per-episode home keyframe, reuses env.init_randomization
+  ros_controller: neural_controller_test   # the controller whose model_path is test_policy.json
+  ros_container: pupper-jazzy     # distrobox the workspace was built in; null = run on the host
+  ros_crun: /home/the_bloop/pupper/distrobox-setup/crun.sh   # sources jazzy + workspace, strips humble
+  ros_episode_seconds: 10
+  ros_launch_budget: 60           # extra seconds the launch may live (startup + teardown)
+  ros_cleanup: true               # pkill stale "launch neural_controller" / ros2_control_node first
+  ros_drop_margin: 0.03           # extra z; the ROS sim has no ground-clearance solver
+  source_artifact: null           # e.g. "entity/pupperv3-mjx-rl/ppo_params_<run>:latest" for lineage
+  commands:                       # one per episode: [vx, vy, yaw_rate]
+    - [0.0, 0.0, 0.0]
+    - [0.3, 0.0, 0.0]
+    - [0.75, 0.0, 0.0]
+    - [-0.5, 0.0, 0.0]
+    - [0.0, 0.4, 0.0]
+    - [0.0, -0.4, 0.0]
+    - [0.0, 0.0, 1.5]
+    - [0.0, 0.0, -1.5]
+    - [0.4, 0.0, 1.0]
+    - [0.3, 0.3, 0.0]
