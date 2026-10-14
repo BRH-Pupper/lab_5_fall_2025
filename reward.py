@@ -136,3 +136,9 @@ def reward_geom_collision(pipeline_state: base.State, geom_ids: np.array) -> jax
             * (pipeline_state.contact.dist < 0.0)
         )
     return contact
+
+def reward_half_height(hh_done: jax.Array) -> jax.Array :
+    return hh_done
+
+def reward_full_height(fh_done: jax.Array) -> jax.Array:
+    return fh_done

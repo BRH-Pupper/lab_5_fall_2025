@@ -1,7 +1,7 @@
 # Default MJX + brax PPO config for Pupper v3.
 # Override any key from CLI: python train.py ppo.learning_rate=1e-4 ppo.num_envs=1024
 
-seed: 0
+seed: 24
 algo: ppo
 
 wandb:
@@ -19,28 +19,44 @@ env:
   default_joint_pos: [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
   joint_lower_limits: [-1.22, -0.42, -2.79, -2.51, -3.14, -0.71, -1.22, -0.42, -2.79, -2.51, -3.14, -0.71]
   joint_upper_limits: [2.51, 3.14, 0.71, 1.22, 0.42, 2.79, 2.51, 3.14, 0.71, 1.22, 0.42, 2.79]
+  half_height: 280
+  full_height: 380
   command_ranges:          # sampled per episode
     lin_vel_x: [-0.75, 0.75]
     lin_vel_y: [-0.5, 0.5]
     ang_vel_yaw: [-2.0, 2.0]
+  init_randomization:        # start pose; false -> fixed drop from the home keyframe
+    enabled: true
+    joint_pos: 0.10         # rad +/-, vs tightest joint margin 0.42
+    joint_vel: 0.5          # rad/s +/-
+    torso_z: [0.15, 0.20]   # m, standing height is ~0.155
+    roll_pitch: 0.12        # rad +/- each (7 deg), vs terminal_body_angle 0.70
+    yaw: 3.14               # rad +/-, commands are body-frame so this is free
+    lin_vel: 0.2            # m/s +/- per axis
+    ang_vel: 0.3            # rad/s +/- per axis
+    settle_steps: 25        # env steps (x0.02 s) holding default_joint_pos before the episode
+    ground_clearance: 0.002 # m, lowest collision geom is lifted to at least this
+
   terminal_body_z: 0.05
   terminal_body_angle: 0.70  # rad, same meaning as robot max_body_angle
   reward_scales:           # keys = reward_<name> functions in reward.py
     tracking_lin_vel: 1.5
     tracking_ang_vel: 0.8
     tracking_orientation: 0.5
-    lin_vel_z: -0.1
+    lin_vel_z: -0.05
     ang_vel_xy: -0.002
     orientation: -0.0
     torques: -0.025
     joint_acceleration: -1.0e-6
     mechanical_work: 0.0
     action_rate: -0.1
-    feet_air_time: 0.02
-    stand_still: -0.0
+    feet_air_time: 0.0
+    stand_still: 0.01
     abduction_angle: -0.01
     foot_slip: -0.2
     termination: -100.0
+    half_height: 50
+    full_height: 250
   reward_params:           # non-env arguments of those functions
     tracking_sigma: 0.25
     command_threshold: 0.05     # stand_still: |cmd| below this counts as "stop"
@@ -56,7 +72,7 @@ policy:
   activation: elu          # RTNeural export supports elu/relu/tanh
 
 ppo:                       # passed to brax.training.agents.ppo.train
-  num_timesteps: 200_000_000
+  num_timesteps: 200_000
   episode_length: 500
   num_envs: 512           # 8GB GPU; raise on bigger cards
   batch_size: 256          # batch_size * num_minibatches must be divisible by num_envs

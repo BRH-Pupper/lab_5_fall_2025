@@ -29,6 +29,16 @@ FOOT_SITES = ["leg_front_r_3_foot_site", "leg_front_l_3_foot_site",
 LOWER_LEG_BODIES = ["leg_front_r_3", "leg_front_l_3", "leg_back_r_3", "leg_back_l_3"]
 
 
+def _euler_to_quat(rpy: jax.Array) -> jax.Array:
+    """roll-pitch-yaw (ZYX) -> MuJoCo quaternion [w, x, y, z]."""
+    cr, cp, cy = jp.cos(rpy / 2)
+    sr, sp, sy = jp.sin(rpy / 2)
+    return jp.array([cr * cp * cy + sr * sp * sy,
+                     sr * cp * cy - cr * sp * sy,
+                     cr * sp * cy + sr * cp * sy,
+                     cr * cp * sy - sr * sp * cy])
+
+
 class PupperMJXEnv(PipelineEnv):
     def __init__(self, env_cfg: dict, model_xml, reward_file):
         e = env_cfg
@@ -61,13 +71,32 @@ class PupperMJXEnv(PipelineEnv):
         home = mj_model.key_qpos[0] if mj_model.nkey else mj_model.qpos0
         self._init_q = jp.array(home).at[7:7 + NUM_JOINTS].set(self.default_pos)
 
+        # start-pose randomization (all collision geoms are used for the ground-clearance lift)
+        self._collision_geoms = np.flatnonzero(mj_model.geom_conaffinity * (mj_model.geom_bodyid > 0))
+        self._collision_half_extent = jp.array(mj_model.geom_size[self._collision_geoms].max(axis=1))
+        self.rand = dict(e["init_randomization"])
+        if self.rand["enabled"]:
+            joint_margin = float(jp.min(jp.minimum(self.default_pos - self.lower, self.upper - self.default_pos)))
+            assert self.rand["joint_pos"] < joint_margin, (
+                f"joint_pos {self.rand['joint_pos']} exceeds the tightest joint margin {joint_margin:.3f} rad")
+            assert self.rand["roll_pitch"] < 0.8 * e["terminal_body_angle"], (
+                f"roll_pitch {self.rand['roll_pitch']} too close to terminal_body_angle {e['terminal_body_angle']}")
+            z_lo, z_hi = self.rand["torso_z"]
+            assert z_lo > e["terminal_body_z"] + 0.05, f"torso_z lower bound {z_lo} too close to terminal_body_z"
+            assert z_hi < 0.30, f"torso_z upper bound {z_hi} is a drop test, not a pose"
+
         self.reward_fn = RewardAdapter(reward_file, e["reward_scales"], e["reward_params"])
         self.reward_fn.bind(set(self._probe_inputs()))  # fail fast on unbindable arguments
+
+        # Height Check flag
+        self._hhc_done = False
+        self.half_height = e["half_height"]
+        self.full_height = e["full_height"]
 
     # ---------------- core API ----------------
     def reset(self, rng: jax.Array) -> State:
         rng, key = jax.random.split(rng)
-        ps = self.pipeline_init(self._init_q, jp.zeros(self.sys.nv))
+        ps = self._initial_state(rng)
 
         info = {
             "rng": rng,
@@ -77,12 +106,51 @@ class PupperMJXEnv(PipelineEnv):
             "feet_air_time": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
             "step": jp.zeros((), dtype=jp.int32),
-            "obs_history": jp.zeros(SINGLE_OBS * self.history).at[5::SINGLE_OBS].set(-1.0),
+            "obs_history": jp.zeros(SINGLE_OBS * self.history),
+            "h_height": jp.zeros((), dtype=bool),
         }
-        obs = self._get_obs(ps, info)
-        info["obs_history"] = obs
+        # fill the whole history with the first frame instead of a fake upright one
+        info["obs_history"] = jp.tile(self._single_obs(ps, info), self.history)
+        obs = info["obs_history"]
         metrics = {f"reward/{k}": jp.zeros(()) for k in self.reward_fn.terms}
         return State(ps, obs, jp.zeros(()), jp.zeros(()), metrics, info)
+
+    # ---------------- start pose ----------------
+    def _initial_state(self, rng: jax.Array):
+        """Nominal pose, or a randomized one lifted clear of the ground and settled."""
+        if not self.rand["enabled"]:
+            return self.pipeline_init(self._init_q, jp.zeros(self.sys.nv))
+
+        r = self.rand
+        k_jp, k_jv, k_rp, k_yaw, k_z, k_lv, k_av = jax.random.split(rng, 7)
+
+        joints = jp.clip(
+            self.default_pos
+            + jax.random.uniform(k_jp, (NUM_JOINTS,), minval=-r["joint_pos"], maxval=r["joint_pos"]),
+            self.lower, self.upper)
+        rpy = jp.concatenate([
+            jax.random.uniform(k_rp, (2,), minval=-r["roll_pitch"], maxval=r["roll_pitch"]),
+            jax.random.uniform(k_yaw, (1,), minval=-r["yaw"], maxval=r["yaw"]),
+        ])
+        z = jax.random.uniform(k_z, (), minval=r["torso_z"][0], maxval=r["torso_z"][1])
+
+        q = self._init_q.at[7:7 + NUM_JOINTS].set(joints).at[2].set(z).at[3:7].set(_euler_to_quat(rpy))
+        qd = jp.concatenate([
+            jax.random.uniform(k_lv, (3,), minval=-r["lin_vel"], maxval=r["lin_vel"]),
+            jax.random.uniform(k_av, (3,), minval=-r["ang_vel"], maxval=r["ang_vel"]),
+            jax.random.uniform(k_jv, (NUM_JOINTS,), minval=-r["joint_vel"], maxval=r["joint_vel"]),
+        ])
+
+        # lift so the lowest collision geom clears the ground (tilt can bury the feet)
+        ps = self.pipeline_init(q, qd)
+        lowest = jp.min(ps.geom_xpos[self._collision_geoms, 2] - self._collision_half_extent)
+        lift = jp.maximum(0.0, r["ground_clearance"] - lowest)
+        ps = self.pipeline_init(q.at[2].add(lift), qd)
+
+        # hold the default pose for a moment so episodes start standing, not falling
+        for _ in range(r["settle_steps"]):
+            ps = self.pipeline_step(ps, self.default_pos)
+        return ps
 
     def step(self, state: State, action: jax.Array) -> State:
         action = jp.clip(action, -1.0, 1.0)
@@ -95,8 +163,16 @@ class PupperMJXEnv(PipelineEnv):
         first_contact = (state.info["feet_air_time"] > 0) * contact_filt
         air_time = state.info["feet_air_time"] + self.dt
 
-        done = self._fallen(ps)
-        inputs = self._reward_inputs(ps, state.info, action, done, contact_filt, first_contact, air_time)
+
+        #Height Checks
+        h = ps.qpos[2]
+        latched = state.info["h_height"]
+
+        hh_done = (h >= self.half_height) & ~latched      # True on exactly one step
+        fh_done = h >= self.full_height
+        done = jp.logical_or(self._fallen(ps), fh_done)
+
+        inputs = self._reward_inputs(ps, state.info, action, done, contact_filt, first_contact, air_time, hh_done, fh_done)
         reward, terms = self.reward_fn(inputs)
 
         info = {
@@ -106,6 +182,7 @@ class PupperMJXEnv(PipelineEnv):
             "feet_air_time": air_time * ~contact_filt,
             "last_contact": contact,
             "step": state.info["step"] + 1,
+            "h_height": (latched | hh_done) & ~done,
         }
         obs = self._get_obs(ps, info)
         info["obs_history"] = obs
@@ -115,7 +192,7 @@ class PupperMJXEnv(PipelineEnv):
                              done=done.astype(jp.float32), metrics=metrics, info=info)
 
     # ---------------- reward plumbing ----------------
-    def _reward_inputs(self, ps, info, action, done, contact_filt, first_contact, air_time) -> dict:
+    def _reward_inputs(self, ps, info, action, done, contact_filt, first_contact, air_time, hh_done, fh_done) -> dict:
         """Everything reward.py functions may ask for, keyed by argument name."""
         return {
             "pipeline_state": ps,
@@ -139,6 +216,8 @@ class PupperMJXEnv(PipelineEnv):
             "feet_site_id": self._feet_site_id,
             "lower_leg_body_id": self._lower_leg_body_id,
             "geom_ids": self._collision_geom_ids,
+            "hh_done": hh_done,
+            "fh_done": fh_done,
         }
 
     def _probe_inputs(self) -> dict:
@@ -152,7 +231,7 @@ class PupperMJXEnv(PipelineEnv):
         return self._reward_inputs(
             self.pipeline_init(self._init_q, jp.zeros(self.sys.nv)), info,
             jp.zeros(NUM_JOINTS), jp.zeros((), dtype=bool), jp.zeros(4, dtype=bool),
-            jp.zeros(4), jp.zeros(4),
+            jp.zeros(4), jp.zeros(4),jp.zeros((), dtype=bool), jp.zeros((), dtype=bool),
         )
 
     # ---------------- helpers ----------------
@@ -168,9 +247,24 @@ class PupperMJXEnv(PipelineEnv):
     def _fallen(self, ps):
         tipped = -self._projected_gravity(ps)[2] < self.cos_terminal_angle
         return jp.logical_or(ps.qpos[2] < self.terminal_body_z, tipped)
+     
+    def _h_height(self, ps):
+        if not self._hhc_done:
+            print(ps.qpos[2])
+            if (ps.qpos[2] >= 100) & (ps.qpos[2] < 200):
+            # if ps.qpos[2] >= 100:
+                self._hhc_done = True
+                return jp.array([True])
+        return False
 
-    def _get_obs(self, ps, info):
-        frame = jp.concatenate([
+    def _f_height(self, ps):
+        if ps.qpos[2] >= 200:
+            return jp.array([True])
+
+
+    def _single_obs(self, ps, info):
+        """One 36-value observation frame, same order as neural_controller.cpp."""
+        return jp.concatenate([
             self._gyro(ps),
             self._projected_gravity(ps),
             info["command"],
@@ -178,5 +272,7 @@ class PupperMJXEnv(PipelineEnv):
             ps.qpos[7:7 + NUM_JOINTS] - self.default_pos,
             info["last_act"],
         ])
+
+    def _get_obs(self, ps, info):
         # newest frame first, drop oldest
-        return jp.concatenate([frame, info["obs_history"][:-SINGLE_OBS]])
+        return jp.concatenate([self._single_obs(ps, info), info["obs_history"][:-SINGLE_OBS]])
