@@ -147,6 +147,10 @@ class EpisodeRunner(Node):
             "frames": len(obs),
             "controller_state_end": state_end,
             "survived": state_end == "active",
+            # first frame after the controller activates: the pose the policy actually
+            # inherits, which is not the spawn pose -- the sim runs uncontrolled while
+            # the spawners come up, so this is what start-pose randomization delivers.
+            "tilt_deg_start": tilt[0],
             "tilt_deg_mean": sum(tilt) / len(tilt),
             "tilt_deg_max": max(tilt),
             "yaw_rate_err_mean": sum(yaw_err) / len(yaw_err),

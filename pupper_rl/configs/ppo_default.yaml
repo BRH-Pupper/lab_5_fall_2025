@@ -19,8 +19,8 @@ env:
   default_joint_pos: [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
   joint_lower_limits: [-1.22, -0.42, -2.79, -2.51, -3.14, -0.71, -1.22, -0.42, -2.79, -2.51, -3.14, -0.71]
   joint_upper_limits: [2.51, 3.14, 0.71, 1.22, 0.42, 2.79, 2.51, 3.14, 0.71, 1.22, 0.42, 2.79]
-  half_height: 280
-  full_height: 380
+  half_height: 0.280
+  full_height: 0.380
   command_ranges:          # sampled per episode
     lin_vel_x: [-0.75, 0.75]
     lin_vel_y: [-0.5, 0.5]
@@ -29,16 +29,20 @@ env:
     enabled: true
     joint_pos: 0.10         # rad +/-, vs tightest joint margin 0.42
     joint_vel: 0.5          # rad/s +/-
-    torso_z: [0.15, 0.20]   # m, standing height is ~0.155
-    roll_pitch: 0.12        # rad +/- each (7 deg), vs terminal_body_angle 0.70
-    yaw: 3.14               # rad +/-, commands are body-frame so this is free
+    torso_z: [0.07, 0.20]   # m, standing height is ~0.155
+    roll_deg: [-7, 7]       # deg [lo, hi]; a bare number x means [-x, x]
+    pitch_deg: [-7, 7]      # roll and pitch compound: 7 deg each = 9.9 deg of body tilt,
+                            # asserted below 0.8 * terminal_body_angle (= 69 deg)
+    yaw_deg: [-180, 180]    # commands are body-frame so full heading is free
     lin_vel: 0.2            # m/s +/- per axis
     ang_vel: 0.3            # rad/s +/- per axis
     settle_steps: 25        # env steps (x0.02 s) holding default_joint_pos before the episode
     ground_clearance: 0.002 # m, lowest collision geom is lifted to at least this
 
   terminal_body_z: 0.05
-  terminal_body_angle: 0.70  # rad, same meaning as robot max_body_angle
+  terminal_body_angle: 1.5   # rad (86 deg); matches the robot's max_body_angle in
+                             # neural_controller/launch/config.yaml, so the sim ends an
+                             # episode exactly where the hardware estops
   reward_scales:           # keys = reward_<name> functions in reward.py
     tracking_lin_vel: 1.5
     tracking_ang_vel: 0.8
@@ -72,7 +76,7 @@ policy:
   activation: elu          # RTNeural export supports elu/relu/tanh
 
 ppo:                       # passed to brax.training.agents.ppo.train
-  num_timesteps: 200_000
+  num_timesteps: 350_000
   episode_length: 500
   num_envs: 512           # 8GB GPU; raise on bigger cards
   batch_size: 256          # batch_size * num_minibatches must be divisible by num_envs
@@ -109,13 +113,10 @@ eval:
   monorepo: ../../pupperv3-monorepo
   randomize_start_pose: true      # per-episode home keyframe, reuses env.init_randomization
   ros_controller: neural_controller_test   # the controller whose model_path is test_policy.json
-  ros_container: pupper-jazzy     # distrobox the workspace was built in; null = run on the host
   ros_crun: /home/the_bloop/pupper/distrobox-setup/crun.sh   # sources jazzy + workspace, strips humble
   ros_episode_seconds: 10
   ros_launch_budget: 60           # extra seconds the launch may live (startup + teardown)
   ros_cleanup: true               # pkill stale "launch neural_controller" / ros2_control_node first
-  ros_drop_margin: 0.03           # extra z; the ROS sim has no ground-clearance solver
-  source_artifact: null           # e.g. "entity/pupperv3-mjx-rl/ppo_params_<run>:latest" for lineage
   commands:                       # one per episode: [vx, vy, yaw_rate]
     - [0.0, 0.0, 0.0]
     - [0.3, 0.0, 0.0]

@@ -17,7 +17,10 @@ Usage:
 """
 
 import argparse
+import filecmp
+import importlib.util
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -26,6 +29,8 @@ from pathlib import Path
 
 LAB_DIR = Path(__file__).resolve().parent.parent
 DOWNLOAD_SCRIPT = LAB_DIR / "download_latest_policy.py"
+# how download_latest_policy.py names what it fetches: policy_<run name>_max_reward_<r>.json
+POLICY_NAME = re.compile(r"^policy_(?P<run>.+)_max_reward_.*\.json$")
 
 
 def parse_args():
@@ -74,6 +79,57 @@ def summarize(results):
     return summary
 
 
+def _lab_module(name):
+    """Import a sibling lab script read-only (it is never modified, no __pycache__)."""
+    spec = importlib.util.spec_from_file_location(name, LAB_DIR / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    prev, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = prev
+    return module
+
+
+def deployed_run_name(model_name="test_policy.json"):
+    """Which W&B run produced the policy that is deployed right now.
+
+    download_latest_policy.py downloads policy_<run>_max_reward_<r>.json and copies it
+    to test_policy.json, so the run name is recoverable from whichever download is
+    byte-identical to the deployed copy. Identical beats newest-mtime: a stale download
+    from another run sitting in the same folder would otherwise win.
+    """
+    model_dir = _lab_module("download_latest_policy").resolve_model_dir()
+    deployed = model_dir / model_name
+    candidates = [(p, m.group("run")) for p in model_dir.glob("policy_*.json")
+                  if (m := POLICY_NAME.match(p.name))]
+    if not candidates:
+        return None
+    if deployed.is_file():
+        same = [name for path, name in candidates if filecmp.cmp(path, deployed, shallow=False)]
+        if len(same) == 1:
+            return same[0]
+        if len(same) > 1:   # the same policy downloaded twice; any of them names the run
+            return same[0]
+    newest = max(candidates, key=lambda c: c[0].stat().st_mtime)
+    print(f"[wandb] {model_name} matches no download; guessing from newest file: {newest[0].name}")
+    return newest[1]
+
+
+def find_run(api, entity, project, number=None, name=None):
+    """The training run, by exact name or by the `-<N>` suffix download_latest_policy.py uses."""
+    runs = api.runs(f"{entity}/{project}")
+    if name is not None:
+        matches = [r for r in runs if r.name == name]
+        if matches:
+            return matches[0]
+        number = int(name.rsplit("-", 1)[-1]) if name.rsplit("-", 1)[-1].isdigit() else number
+    if number is None:
+        return None
+    matches = [r for r in runs if r.name.endswith(f"-{number}")]
+    return matches[0] if matches else None
+
+
 def log_to_wandb(cfg, results, summary, meta):
     w = cfg["wandb"]
     if not w["enabled"] or w["mode"] == "disabled":
@@ -81,19 +137,35 @@ def log_to_wandb(cfg, results, summary, meta):
         return
     import wandb
 
-    run = wandb.init(project=w["project"], entity=w["entity"], mode=w["mode"],
-                     job_type="eval", config={**meta, "eval": cfg["eval"]})
-    if meta.get("source_artifact"):
-        try:
-            run.use_artifact(meta["source_artifact"])   # model -> eval lineage edge
-        except Exception as e:
-            print(f"could not link artifact {meta['source_artifact']}: {e}")
+    api = wandb.Api()
+    entity = w["entity"] or api.default_entity
+    name = None if meta.get("source_run_number") else deployed_run_name()
+    target = find_run(api, entity, w["project"], meta.get("source_run_number"), name)
+    if target is None:
+        print("[wandb] could not identify the run that produced this policy; "
+              "nothing logged. Pass --run <N> to say which it is.")
+        return
 
+    # resume the producing run: the eval belongs to the policy, not to a run of its own.
+    # No job_type and no use_artifact -- that run already owns the artifact it produced.
+    # Namespace per backend: brax's own evaluator already owns `eval/*` on this run
+    # (eval/episode_reward, eval/avg_episode_length, ...), so `<backend>_eval/*` keeps
+    # the deployed-stack numbers separate and comparable across backends.
+    prefix = f"{meta['backend']}_eval"
+    artifacts = [a.name for a in target.logged_artifacts() if ".json" in a.name]
+    run = wandb.init(project=w["project"], entity=entity, mode=w["mode"],
+                     id=target.id, resume="allow")
     columns = sorted({k for r in results for k in r})
     table = wandb.Table(columns=columns,
                         data=[[r.get(c) for c in columns] for r in results])
-    wandb.log({"eval/episodes": table, **{f"eval/{k}": v for k, v in summary.items()}})
-    print(f"logged to {run.url}")
+    run.log({f"{prefix}/episodes": table})
+    run.summary.update({
+        **{f"{prefix}/{k}": v for k, v in summary.items()},
+        f"{prefix}/meta": {**meta, "run": target.name,
+                           "policy_artifact": artifacts[0] if artifacts else None,
+                           "at": datetime.now().isoformat(timespec="seconds"), "config": cfg["eval"]},
+    })
+    print(f"logged eval into {target.name}: {run.url}")
     run.finish()
 
 
@@ -108,7 +180,7 @@ def main():
         print("mjx backend not implemented yet")
         return 2
 
-    run_number = None
+    run_number = args.run if args.skip_download else None
     if not args.skip_download:
         run_number, ok = download_policy(args.run)
         if not ok:
@@ -130,7 +202,6 @@ def main():
     log_to_wandb(cfg, results, summary, {
         "backend": "ros",
         "source_run_number": run_number,
-        "source_artifact": e_cfg["source_artifact"] or None,
         "out_dir": str(out_dir),
     })
     print(f"\nartifacts in {out_dir}")

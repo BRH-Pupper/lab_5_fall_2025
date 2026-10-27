@@ -20,6 +20,7 @@ from brax.envs.base import PipelineEnv, State
 from brax.io import mjcf
 from jax import numpy as jp
 
+from ..utils.config import init_ranges, worst_tilt
 from .reward_adapter import RewardAdapter
 
 SINGLE_OBS = 36
@@ -75,14 +76,23 @@ class PupperMJXEnv(PipelineEnv):
         self._collision_geoms = np.flatnonzero(mj_model.geom_conaffinity * (mj_model.geom_bodyid > 0))
         self._collision_half_extent = jp.array(mj_model.geom_size[self._collision_geoms].max(axis=1))
         self.rand = dict(e["init_randomization"])
+        self.tilt = None
         if self.rand["enabled"]:
+            self.tilt = init_ranges(self.rand)
             joint_margin = float(jp.min(jp.minimum(self.default_pos - self.lower, self.upper - self.default_pos)))
             assert self.rand["joint_pos"] < joint_margin, (
                 f"joint_pos {self.rand['joint_pos']} exceeds the tightest joint margin {joint_margin:.3f} rad")
-            assert self.rand["roll_pitch"] < 0.8 * e["terminal_body_angle"], (
-                f"roll_pitch {self.rand['roll_pitch']} too close to terminal_body_angle {e['terminal_body_angle']}")
+            # roll and pitch compound, so check the tilt they can reach together, not
+            # each axis on its own: a reset past terminal_body_angle is `done` on step 1.
+            reach = worst_tilt(self.tilt)
+            assert reach < 0.8 * e["terminal_body_angle"], (
+                f"roll_deg {self.rand.get('roll_deg', self.rand.get('roll_pitch_deg'))} + "
+                f"pitch_deg {self.rand.get('pitch_deg', self.rand.get('roll_pitch_deg'))} reach "
+                f"{np.degrees(reach):.1f} deg ({reach:.3f} rad) of body tilt, too close to "
+                f"terminal_body_angle {e['terminal_body_angle']} rad "
+                f"({np.degrees(e['terminal_body_angle']):.1f} deg)")
             z_lo, z_hi = self.rand["torso_z"]
-            assert z_lo > e["terminal_body_z"] + 0.05, f"torso_z lower bound {z_lo} too close to terminal_body_z"
+            assert z_lo > e["terminal_body_z"] + 0.01, f"torso_z lower bound {z_lo} too close to terminal_body_z"
             assert z_hi < 0.30, f"torso_z upper bound {z_hi} is a drop test, not a pose"
 
         self.reward_fn = RewardAdapter(reward_file, e["reward_scales"], e["reward_params"])
@@ -129,8 +139,10 @@ class PupperMJXEnv(PipelineEnv):
             + jax.random.uniform(k_jp, (NUM_JOINTS,), minval=-r["joint_pos"], maxval=r["joint_pos"]),
             self.lower, self.upper)
         rpy = jp.concatenate([
-            jax.random.uniform(k_rp, (2,), minval=-r["roll_pitch"], maxval=r["roll_pitch"]),
-            jax.random.uniform(k_yaw, (1,), minval=-r["yaw"], maxval=r["yaw"]),
+            jax.random.uniform(k_rp, (2,),
+                               minval=jp.array([self.tilt["roll"][0], self.tilt["pitch"][0]]),
+                               maxval=jp.array([self.tilt["roll"][1], self.tilt["pitch"][1]])),
+            jax.random.uniform(k_yaw, (1,), minval=self.tilt["yaw"][0], maxval=self.tilt["yaw"][1]),
         ])
         z = jax.random.uniform(k_z, (), minval=r["torso_z"][0], maxval=r["torso_z"][1])
 

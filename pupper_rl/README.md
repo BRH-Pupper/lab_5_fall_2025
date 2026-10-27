@@ -2,6 +2,10 @@
 
 Basic PPO template: Pupper v3 in MJX (GPU) + brax PPO → W&B → robot via `lab_5_fall_2025/deploy.py`.
 
+Built for **ROS Jazzy** (the distro the robot and this workspace target): run it on a Jazzy
+system — the `pupper-jazzy` distrobox or a native install. `eval.py --backend ros` launches the
+workspace directly and will not work on Humble.
+
 ## Layout
 
 ```
@@ -98,12 +102,23 @@ sim:=True teleop:=False` comes up; the controller is activated through
 `/controller_manager/switch_controller`; `/cmd_vel` is driven with the episode's command preset;
 `/<controller>/observation` is recorded; then everything is torn down and the symlink restored.
 
+W&B: the eval does not create a run of its own. It identifies the run that produced the
+deployed policy — from `--run <N>`, else by finding which `policy_<run>_max_reward_*.json` in
+the model dir is byte-identical to `test_policy.json` — resumes it, and writes
+`ros_eval/<metric>` into that run's summary plus a `ros_eval/episodes` table. The prefix is the
+backend name because brax's evaluator already owns `eval/*` on the training run. If the run
+cannot be identified, nothing is logged and it says so; episode JSONs are in `outputs/` either
+way.
+
 Environment notes:
-- The workspace is built for ROS **Jazzy** while the host has Humble, so every ROS command runs
-  inside the `pupper-jazzy` distrobox via `distrobox-setup/crun.sh` (`eval.ros_container`,
-  `eval.ros_crun`). Launching on the host dies with `GLIBCXX_3.4.32 not found`.
-- `rclpy` lives in the container's python, not this venv, so the ROS side is a separate script
-  (`eval/ros_agent.py`) that returns metrics as JSON.
+- **Run this on ROS Jazzy** — the system the workspace was built for (`pupper-jazzy` distrobox
+  or a native Jazzy install). On a Humble system the launch dies with
+  `GLIBCXX_3.4.32 not found` and every spawner exits 1. Every ROS command goes through
+  `eval.ros_crun` (`distrobox-setup/crun.sh`), which drops inherited Humble paths, sources
+  Jazzy + the workspace install and selects cyclonedds, so it does not matter what the calling
+  shell had sourced.
+- `rclpy` lives in the system python, not this venv, so the ROS side is a separate script
+  (`eval/ros_agent.py`) run under that interpreter; it returns metrics as JSON.
 - Metrics are limited to what ROS topics expose: survival, tilt (from projected gravity),
   yaw-rate tracking, action rate, joint deviation. **No torso height and no body linear
   velocity** — the sim publishes no ground-truth pose, so reward terms cannot be recomputed.
